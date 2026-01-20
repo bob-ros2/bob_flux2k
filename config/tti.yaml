@@ -1,8 +1,9 @@
-# ROS 2 Parameter file for bob_flux2k tti node
-/tti:
+/**:
   ros__parameters:
 
     # The Hugging Face repo id to use
+    # black-forest-labs/FLUX.2-klein-4B (Apache 2.0)
+    # black-forest-labs/FLUX.2-klein-9B (Non-commercial license)
     repo_id: "black-forest-labs/FLUX.2-klein-4B"
     
     # Directory to cache Hugging Face models
@@ -14,10 +15,17 @@
     # --- Initial Prompt ---
     
     # An initial prompt to generate an image at startup
-    prompt: "A high-quality photo of a futuristic cat sitting on a neon-lit dashboard of a spaceship, cinematic lighting, 8k resolution"
+    prompt: "A robot face close up which has a small daisy flower in its mouth on the left side, cinematic lighting, 8k resolution"
 
     # --- Dynamic Parameters (Adjustable via RQT) ---
     
+    # If true, keeps the model in memory between prompts (faster)
+    keep_loaded: true
+
+    # If true, uses model CPU offloading to save VRAM. 
+    # Set to false for maximum speed on high-end GPUs like RTX 4090 (requires ~22GB VRAM)
+    cpu_offload: true
+
     # Number of denoising steps (Klein is optimized for 4)
     num_inference_steps: 4
     
