@@ -165,6 +165,22 @@ class Flux2Knode(Node):
                 description='The frame_id for the generated image messages.'
             )
         )
+        self.declare_parameter(
+            'keep_loaded',
+            os.environ.get('FLUX2K_KEEP_LOADED', 'true').lower() in ['1','true'],
+            ParameterDescriptor(
+                type=ParameterType.PARAMETER_BOOL,
+                description='If true, keeps the model in memory between prompts.'
+            )
+        )
+        self.declare_parameter(
+            'cpu_offload',
+            os.environ.get('FLUX2K_CPU_OFFLOAD', 'true').lower() in ['1','true'],
+            ParameterDescriptor(
+                type=ParameterType.PARAMETER_BOOL,
+                description='If true, uses model CPU offloading to save VRAM.'
+            )
+        )
 
         # --- Get Parameters ---
         self.repo_id = self.get_parameter('repo_id').value
@@ -179,6 +195,9 @@ class Flux2Knode(Node):
         self.height = self.get_parameter('height').value
         self.width = self.get_parameter('width').value
         self.torch_dtype = torch.bfloat16
+        self.pipe = None
+        self.current_repo_id = None
+        self.current_cpu_offload = None
 
         # Ensure model_dir exists
         if self.model_dir and not os.path.exists(self.model_dir):
@@ -226,45 +245,60 @@ class Flux2Knode(Node):
     def prompt_callback(self, msg):
         prompt = msg.data
         self.get_logger().info(f"Received prompt")
-        self.get_logger().debug(f"Promt: '{prompt[:60]}...'")
+        self.get_logger().debug(f"Prompt: {prompt}")
         
         callback_start = time.time()
 
         try:
-            # We will load the full pipeline but use enable_model_cpu_offload() 
-            # to be memory efficient.
-            
-            start_time = time.time()
-            self.get_logger().info("Loading Flux2-klein pipeline...")
-            
-            pipe = Flux2KleinPipeline.from_pretrained(
-                self.repo_id,
-                torch_dtype=self.torch_dtype,
-                cache_dir=self.model_dir
-            )
-            
-            # Optimization for RTX 4090 (24GB) or lower.
-            # Even with 24GB, offloading is safer for multi-node setups.
-            pipe.enable_model_cpu_offload()
-            
-            self.get_logger().info(f"Pipeline loaded in {time.time() - start_time:.2f}s")
+            # --- Model Loading / Caching Logic ---
+            cpu_offload = self.get_parameter('cpu_offload').value
+            repo_id = self.repo_id # Static for now, but we check anyway
+
+            # Reload if not loaded or if configuration changed
+            if self.pipe is None or self.current_repo_id != repo_id or self.current_cpu_offload != cpu_offload:
+                if self.pipe is not None:
+                    self.get_logger().info("Configuration changed or pipe exists, clearing old pipeline...")
+                    del self.pipe
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                start_time = time.time()
+                self.get_logger().info(f"Loading Flux2-klein pipeline ({repo_id})...")
+                
+                self.pipe = Flux2KleinPipeline.from_pretrained(
+                    repo_id,
+                    torch_dtype=self.torch_dtype,
+                    cache_dir=self.model_dir
+                )
+
+                if cpu_offload:
+                    self.get_logger().info("Optimization: Enabling model CPU offload...")
+                    self.pipe.enable_model_cpu_offload()
+                else:
+                    self.get_logger().info(f"Optimization: Moving whole model to {self.device}...")
+                    self.pipe.to(self.device)
+                
+                self.get_logger().info(f"Pipeline loaded in {time.time() - start_time:.2f}s")
+                self.current_repo_id = repo_id
+                self.current_cpu_offload = cpu_offload
+            else:
+                self.get_logger().debug("Using cached pipeline.")
 
             # Seed handling
             current_seed = self.seed
             if current_seed == -1:
                 current_seed = random.randint(0, 2**32 - 1)
-            
-            generator = torch.Generator(device=self.device).manual_seed(current_seed)
-            self.get_logger().info(f"Using seed: {current_seed}")
 
+            generator = torch.Generator(device=self.device).manual_seed(current_seed)
             # Prepare call arguments
             # We fetch parameter values dynamically to support RQT reconfiguration
             num_steps = self.get_parameter('num_inference_steps').value
             guidance = self.get_parameter('guidance_scale').value
             num_images = self.get_parameter('num_images_per_prompt').value
             max_seq = self.get_parameter('max_sequence_length').value
-            
-            self.get_logger().debug(f"Inference Params: steps={num_steps}, guidance={guidance:.2f}, num_images={num_images}, max_seq={max_seq}")
+
+            self.get_logger().debug(
+                f"Inference Params: steps={num_steps}, guidance={guidance:.2f}, num_images={num_images}, max_seq={max_seq}, current_seed={current_seed}")
 
             call_kwargs = {
                 "prompt": prompt,
@@ -283,9 +317,9 @@ class Flux2Knode(Node):
                 input_img = load_image(self.input_image).convert("RGB")
                 call_kwargs["image"] = input_img
 
-            self.get_logger().info("Generating image...")
+            self.get_logger().info(f"Generating image with seed {current_seed} ...")
             gen_start = time.time()
-            output = pipe(**call_kwargs)
+            output = self.pipe(**call_kwargs)
             
             for i, image in enumerate(output.images):
                 self.get_logger().info(f"Generation finished (Image {i+1}/{len(output.images)}) in {time.time() - gen_start:.2f}s")
@@ -312,11 +346,17 @@ class Flux2Knode(Node):
             self.get_logger().error(f"Error in prompt_callback: {e}")
         
         finally:
-            self.get_logger().info("Cleaning up...")
-            if 'pipe' in locals():
-                del pipe
-            gc.collect()
-            torch.cuda.empty_cache()
+            keep_loaded = self.get_parameter('keep_loaded').value
+            
+            if not keep_loaded:
+                self.get_logger().info("Cleaning up (keep_loaded=false)...")
+                if self.pipe is not None:
+                    del self.pipe
+                    self.pipe = None
+                gc.collect()
+                torch.cuda.empty_cache()
+            else:
+                self.get_logger().debug("Keeping model loaded for next prompt.")
 
             if self.once:
                 self.get_logger().info("'once' is True, exiting node.")
