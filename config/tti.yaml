@@ -14,7 +14,8 @@
 
     # --- Initial Prompt ---
     
-    # An initial prompt to generate an image at startup
+    # An initial prompt to generate an image at startup. 
+    # Supports plain text OR JSON: {"content": "...", "image_url": "..."}
     prompt: "A robot face close up which has a small daisy flower in its mouth on the left side, cinematic lighting, 8k resolution"
 
     # --- Dynamic Parameters (Adjustable via RQT) ---

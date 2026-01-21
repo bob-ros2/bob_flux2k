@@ -4,6 +4,9 @@ import time
 import random
 import string
 import gc
+import json
+import base64
+import io
 
 import rclpy
 from rclpy.node import Node
@@ -35,8 +38,7 @@ class Flux2Knode(Node):
 
         self.bridge = CvBridge()
 
-        # --- ROS 2 Parameter Declaration ---
-        # We follow the pattern from flux2_node.py
+        # --- ROS Parameter Declaration ---
         self.declare_parameter(
             'repo_id',
             os.environ.get('FLUX2K_REPO_ID', 'black-forest-labs/FLUX.2-klein-4B'),
@@ -232,6 +234,56 @@ class Flux2Knode(Node):
     def _initial_prompt_timer_callback(self):
         self.prompt_callback(String(data=self.prompt))
 
+    def _parse_prompt(self, msg_data):
+        """
+        Parses the incoming prompt message. 
+        Supports plain text or a JSON string like:
+        {"content": "...", "image_url": "..."}
+        """
+        try:
+            data = json.loads(msg_data)
+            if isinstance(data, dict):
+                if 'content' not in data:
+                    self.get_logger().error("JSON prompt missing 'content' key.")
+                    return None, None
+                return data.get('content'), data.get('image_url')
+        except json.JSONDecodeError:
+            pass # Not a JSON string, treat as plain text
+
+        return msg_data, None
+
+    def _load_input_image(self, image_input):
+        """
+        Loads an image from a URL, local file path, or base64 data string.
+        """
+        try:
+            if image_input.startswith('data:image'):
+                # Handle base64
+                self.get_logger().info("Loading image from base64 data...")
+                header, encoded = image_input.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                return PILImage.open(io.BytesIO(image_data)).convert("RGB")
+            
+            # Strip file:// prefix if present
+            clean_path = image_input
+            if image_input.startswith('file://'):
+                clean_path = image_input[7:]
+            
+            if not clean_path.startswith(('http://', 'https://')):
+                # Local file handling
+                if not os.path.exists(clean_path):
+                    self.get_logger().error(f"Local image file does not exist: {clean_path}")
+                    return None
+                self.get_logger().info(f"Loading local image from: {clean_path}")
+                return PILImage.open(clean_path).convert("RGB")
+            else:
+                # Handle URL via diffusers utility
+                self.get_logger().info(f"Loading image from URL: {clean_path}")
+                return load_image(clean_path).convert("RGB")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load input image: {e}")
+            return None
+
     def _get_image_output_path(self):
         if self.image_path.endswith('auto'):
             directory = os.path.dirname(self.image_path)
@@ -243,7 +295,12 @@ class Flux2Knode(Node):
             return self.image_path
 
     def prompt_callback(self, msg):
-        prompt = msg.data
+        prompt_data = msg.data
+        prompt, json_image_url = self._parse_prompt(prompt_data)
+        
+        if prompt is None:
+            return # Error already logged in _parse_prompt
+
         self.get_logger().info(f"Received prompt")
         self.get_logger().debug(f"Prompt: {prompt}")
         
@@ -297,7 +354,7 @@ class Flux2Knode(Node):
             num_images = self.get_parameter('num_images_per_prompt').value
             max_seq = self.get_parameter('max_sequence_length').value
 
-            self.get_logger().debug(
+            self.get_logger().info(
                 f"Inference Params: steps={num_steps}, guidance={guidance:.2f}, num_images={num_images}, max_seq={max_seq}, current_seed={current_seed}")
 
             call_kwargs = {
@@ -311,13 +368,18 @@ class Flux2Knode(Node):
                 "generator": generator
             }
 
-            # Handle image-to-image if input_image is set
-            if self.input_image:
-                self.get_logger().info(f"Loading input image: {self.input_image}")
-                input_img = load_image(self.input_image).convert("RGB")
-                call_kwargs["image"] = input_img
+            # Determine input image
+            # Priority: 1. JSON-provided image_url, 2. ROS-parameter input_image
+            target_image_input = json_image_url if json_image_url else self.input_image
+            
+            if target_image_input:
+                input_img = self._load_input_image(target_image_input)
+                if input_img:
+                    call_kwargs["image"] = input_img
+                else:
+                    self.get_logger().warning("Image input provided but failed to load. Falling back to text-to-image.")
 
-            self.get_logger().info(f"Generating image with seed {current_seed} ...")
+            self.get_logger().info(f"Generating image...")
             gen_start = time.time()
             output = self.pipe(**call_kwargs)
             
