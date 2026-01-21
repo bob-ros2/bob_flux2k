@@ -1,0 +1,10 @@
+torch
+diffusers
+transformers
+accelerate
+sentencepiece
+numpy<2.0
+opencv-python
+Pillow
+huggingface_hub
+cv_bridge

@@ -13,6 +13,27 @@ This node supports both the 4B and 9B variants of the FLUX.2-klein family:
 
 You can switch models via the `repo_id` ROS parameter or the `FLUX2K_REPO_ID` environment variable.
 
+## Installation & Build
+
+### 1. Clone the repository
+```bash
+cd ~/ros2_ws/src
+git clone https://github.com/bob-ros2/bob_flux2k.git
+```
+
+### 2. Install dependencies
+It is recommended to use a virtual environment.
+```bash
+pip install -r bob_flux2k/requirements.txt
+```
+
+### 3. Build the workspace
+```bash
+cd ~/ros2_ws
+colcon build --packages-select bob_flux2k
+source install/setup.bash
+```
+
 ## Usage
 
 ### Run the node
@@ -31,6 +52,29 @@ ros2 run bob_flux2k tti --ros-args --params-file src/bob_flux2k/config/tti.yaml
 ### Send a prompt
 ```bash
 ros2 topic pub /prompt std_msgs/msg/String "{data: 'A futuristic city in the style of cyberpunk'}" --once
+```
+
+### JSON Prompt Support (Dynamic ITI/TTI)
+The node automatically detects if a prompt is plain text or a JSON string. Using JSON allows you to specify an input image dynamically for a single request:
+
+**Format:**
+```json
+{
+  "content": "A high-quality photo of a cat",
+  "image_url": "file:///path/to/image.jpg"
+}
+```
+
+**Features:**
+- **Text-to-Image**: Just send plain text or JSON without an `image_url`.
+- **Image-to-Image**: Provide an `image_url`. Supports:
+    - Local files: `file:///home/user/image.png`
+    - Remote URLs: `https://example.com/image.jpg`
+    - **Base64 encoded**: `data:image/png;base64,...` (Ideal for web-app integrations).
+
+**Example (CLI):**
+```bash
+ros2 topic pub /prompt std_msgs/msg/String "{data: '{\"content\": \"a robot dog\", \"image_url\": \"file:///tmp/dog.jpg\"}'}" --once
 ```
 
 ## ROS API
