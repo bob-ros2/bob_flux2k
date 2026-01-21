@@ -112,7 +112,7 @@ These are set at **startup** and cannot be changed while the node is running.
 | `model_dir` | `FLUX2K_MODEL_DIR` | `./models` | Cache directory. |
 | `device` | `FLUX2K_DEVICE` | `cuda:0` | Computing device. |
 | `seed` | `FLUX2K_SEED` | `-1` | Random seed (-1 for random). |
-| `image_path` | `FLUX2K_IMAGE_PATH` | `generated_images/auto` | Save path for images. |
+| `image_path` | `FLUX2K_IMAGE_PATH` | `''` | Path for saving the output image. If empty, local saving is disabled. |
 | `once` | `FLUX2K_ONCE` | `false` | Exit after first generation if true. |
 | `height` | `FLUX2K_HEIGHT` | `1024` | Image height. |
 | `width` | `FLUX2K_WIDTH` | `1024` | Image width. |

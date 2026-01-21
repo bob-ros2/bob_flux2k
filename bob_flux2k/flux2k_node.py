@@ -33,6 +33,10 @@ class Flux2Knode(Node):
     """
 
     def __init__(self):
+        """
+        Initializes the Flux2Knode, declaring parameters, creating subscribers/publishers,
+        and setting up the image processing bridge.
+        """
         super().__init__('tti')
         self.get_logger().info("Initializing Flux2-klein ROS node...")
 
@@ -89,10 +93,10 @@ class Flux2Knode(Node):
         )
         self.declare_parameter(
             'image_path',
-            os.environ.get('FLUX2K_IMAGE_PATH', 'generated_images/auto'),
+            os.environ.get('FLUX2K_IMAGE_PATH', ''),
             ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
-                description='Path for saving the output image.'
+                description='Path for saving the output image. If empty, local saving is disabled.'
             )
         )
         self.declare_parameter(
@@ -232,6 +236,9 @@ class Flux2Knode(Node):
             self.create_timer(0.1, lambda: self._initial_prompt_timer_callback(), oneshot=True)
 
     def _initial_prompt_timer_callback(self):
+        """
+        One-shot timer callback to process the initial prompt after the node has initialized.
+        """
         self.prompt_callback(String(data=self.prompt))
 
     def _parse_prompt(self, msg_data):
@@ -285,6 +292,10 @@ class Flux2Knode(Node):
             return None
 
     def _get_image_output_path(self):
+        """
+        Generates the output path for the generated image.
+        If image_path ends with 'auto', generates a unique filename with a counter and random suffix.
+        """
         if self.image_path.endswith('auto'):
             directory = os.path.dirname(self.image_path)
             random_chars = string.ascii_letters + string.digits
@@ -295,6 +306,11 @@ class Flux2Knode(Node):
             return self.image_path
 
     def prompt_callback(self, msg):
+        """
+        Callback for the 'prompt' subscription. 
+        Parses the prompt (supports JSON for dynamic ITI), loads or clears the model as needed,
+        runs the inference, saves the result, and publishes the image.
+        """
         prompt_data = msg.data
         prompt, json_image_url = self._parse_prompt(prompt_data)
         
@@ -387,12 +403,13 @@ class Flux2Knode(Node):
                 self.get_logger().info(f"Generation finished (Image {i+1}/{len(output.images)}) in {time.time() - gen_start:.2f}s")
 
                 # Save image
-                output_path = self._get_image_output_path()
-                image.save(output_path)
-                self.get_logger().info(f"Image saved to: {output_path}")
+                if self.image_path:
+                    output_path = self._get_image_output_path()
+                    image.save(output_path)
+                    self.get_logger().info(f"Image saved to: {output_path}")
 
-                if self.image_path.endswith('auto'):
-                    self.image_counter += 1
+                    if self.image_path.endswith('auto'):
+                        self.image_counter += 1
 
                 # Publish image as BGR8 (Standard for ROS 2 vision nodes)
                 # We convert PIL RGB -> Numpy -> BGR
@@ -428,6 +445,9 @@ class Flux2Knode(Node):
             self.get_logger().info(f"DONE: Total callback duration: {total_duration:.2f}s")
 
 def main(args=None):
+    """
+    Main entry point for the Flux2K ROS 2 node.
+    """
     rclpy.init(args=args)
     node = Flux2Knode()
     try:
